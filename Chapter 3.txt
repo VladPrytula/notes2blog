@@ -32,6 +32,13 @@ $$
 \text{score}(a) = \underbrace{(x_{t,a})^T \hat{\theta}_{t-1,a}}_{\text{Exploitation}} + \underbrace{\alpha \sqrt{(x_{t,a})^T A_{t-1,a}^{-1} x_{t,a}}}_{\text{Exploration}}
 $$
 
+**Definition 3.2: LinUCB Payoff Score (Recap)**
+At the beginning of time step $t$, using parameters $(A_{t-1,a}, b_{t-1,a})$ estimated from all data up to step $t-1$, the payoff for arm $a$ is:
+$$
+p_{t,a} = \underbrace{ (x_{t,a})^T \hat{\theta}_{t-1,a} }_{\text{Exploitation}} + \underbrace{ \alpha \sqrt{ (x_{t,a})^T A_{t-1,a}^{-1} x_{t,a} } }_{\text{Exploration}}
+$$
+where $\hat{\theta}_{t-1,a} = A_{t-1,a}^{-1} b_{t-1,a}$.
+
 The brilliance of this formulation lies in its elegant, closed-form expression for uncertainty, derived from the properties of ridge regression.
 
 **The Generalization Step**
@@ -112,5 +119,7 @@ At each time step $t$, the agent performs the following steps:
 The significance of this formulation cannot be overstated. We now have a **single, shared** matrix $A$ and vector $b$ for the entire system. When the agent recommends product $a_t$ and receives reward $r_t$, the subsequent update to $A_t$, $b_t$, and $\hat{\theta}_t$ refines a global model of the world. This new knowledge is immediately available for evaluating *all other products*, even those in completely different categories. The model learns to generalize across the entire item space, elegantly solving the primary weakness of the disjoint LinUCB model. This architecture is both statistically efficient and computationally scalable.
 
 Now, let us proceed to implement this more sophisticated agent. We will begin by defining the neural network architecture that will serve as the core of our `NeuralUCBAgent`.
+
+
 
 

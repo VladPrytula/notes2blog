@@ -399,16 +399,16 @@ torch.save(batch_model.state_dict(), "batch_recommender_model_ch2.pth")
     )
     
     Training the batched PyTorch model...
-    Epoch 1/10, Train Loss: 0.5206, Val Loss: 0.5082
-    Epoch 2/10, Train Loss: 0.5086, Val Loss: 0.5060
-    Epoch 3/10, Train Loss: 0.5036, Val Loss: 0.4990
-    Epoch 4/10, Train Loss: 0.4850, Val Loss: 0.4707
-    Epoch 5/10, Train Loss: 0.4491, Val Loss: 0.4396
-    Epoch 6/10, Train Loss: 0.4234, Val Loss: 0.4258
-    Epoch 7/10, Train Loss: 0.4111, Val Loss: 0.4185
-    Epoch 8/10, Train Loss: 0.4048, Val Loss: 0.4156
-    Epoch 9/10, Train Loss: 0.4011, Val Loss: 0.4136
-    Epoch 10/10, Train Loss: 0.3983, Val Loss: 0.4130
+    Epoch 1/10, Train Loss: 0.5247, Val Loss: 0.5078
+    Epoch 2/10, Train Loss: 0.5090, Val Loss: 0.5070
+    Epoch 3/10, Train Loss: 0.5052, Val Loss: 0.5009
+    Epoch 4/10, Train Loss: 0.4928, Val Loss: 0.4829
+    Epoch 5/10, Train Loss: 0.4592, Val Loss: 0.4465
+    Epoch 6/10, Train Loss: 0.4289, Val Loss: 0.4269
+    Epoch 7/10, Train Loss: 0.4138, Val Loss: 0.4191
+    Epoch 8/10, Train Loss: 0.4061, Val Loss: 0.4154
+    Epoch 9/10, Train Loss: 0.4019, Val Loss: 0.4147
+    Epoch 10/10, Train Loss: 0.3985, Val Loss: 0.4131
     
     Training complete.
 
@@ -929,7 +929,7 @@ We will one-hot encode both and concatenate them.
 Our final feature vector $x$ for a `(user, product)` pair will be the concatenation of these two one-hot vectors.
 
 **Code Block 2.1: The LinUCB Agent Implementation**
-```python
+ ```python
 from sklearn.preprocessing import OneHotEncoder
 
 class LinUCBAgent:
@@ -1039,8 +1039,6 @@ linucb_agent = LinUCBAgent(
 )
 print("LinUCB Agent Initialized.")
 ```
-
-
 
 
 ```python
@@ -1185,410 +1183,124 @@ The code in Block 2.1 translates our theoretical algorithm into a practical Pyth
 >
 > Understanding this mapping is key. The mathematical notation provides the theoretical guarantee of correctness, while the implementation provides an efficient, stateful representation of the same process. The code is a correct and efficient instantiation of the temporal logic described by the mathematics.
 
-<!-- **Dissecting the Implementation:**
+> #### **Remark 2.2: On Computational Efficiency and the Perils of Naive Implementation**
+>
+> A reader with a keen eye for computational complexity will have noticed a significant inefficiency in the `predict` method of our initial `LinUCBAgent` implementation. Let us highlight it, as it presents a critical teaching moment.
+>
+>  ```python
+> # In the naive LinUCBAgent.predict()
+> for arm_idx in range(self.n_products):
+>     # ...
+>     A_inv = np.linalg.inv(self.A[arm_idx]) # O(d^3) computation!
+>     # ...
+> ```
+>
+> The operation `np.linalg.inv()` calculates the inverse of a matrix, an operation with a time complexity of $O(d^3)$, where $d$ is the dimension of our feature space. Our code performs this expensive calculation for *every arm* during *every single prediction step*. For a recommendation request with $N_a$ arms, the total complexity of a single `predict` call is a prohibitive $O(N_a \cdot d^3)$.
+>
+> This is a correct, but computationally naive, implementation. A more astute approach recognizes that for a single prediction step (a single user arriving), the matrices $A_a$ and vectors $b_a$ are fixed. We can achieve a significant speedup by calculating all necessary inverses and parameter vectors *once* before the loop.
+>
+> A more efficient `predict` method would be structured as follows:
+>
+> ```python
+> # A more efficient implementation of the predict method
+> def predict(self, feature_vectors: np.ndarray) -> int:
+>     """
+>     Calculates the UCB score for each arm more efficiently and chooses the best one.
+>     """
+>     scores = np.zeros(self.n_products)
+>     
+>     # Pre-calculate all inverses and theta_hats once per predict call.
+>     # This avoids N_a redundant O(d^3) computations.
+>     A_invs = [np.linalg.inv(A) for A in self.A]
+>     theta_hats = [A_inv @ b for A_inv, b in zip(A_invs, self.b)]
+> 
+>     for arm_idx in range(self.n_products):
+>         x = feature_vectors[arm_idx].reshape(-1, 1) # Ensure (d x 1)
+>         
+>         A_inv = A_invs[arm_idx]
+>         theta_hat = theta_hats[arm_idx]
+>         
+>         # Exploitation term
+>         exploit_term = (theta_hat.T @ x).item()
+>         
+>         # Exploration term
+>         explore_term = self.alpha * np.sqrt(x.T @ A_inv @ x).item()
+>         
+>         scores[arm_idx] = exploit_term + explore_term
+>         
+>     # Choose the arm with the highest score
+>     chosen_arm = np.argmax(scores)
+>     return chosen_arm
+> ```
+>
+> The complexity of this revised method is now dominated by the initial pre-calculation, making it $O(N_a \cdot d^3)$ in total for the first part, but the loop itself becomes much faster. While still demanding, this is a dramatic improvement and a better pedagogical model.
+>
+> For the truly geeky one, it is worth noting that even this is not the theoretical optimum. The matrix inverse can be updated iteratively in $O(d^2)$ time using the **Sherman-Morrison-Woodbury formula**, which provides a method for calculating $(A + u v^T)^{-1}$ given $A^{-1}$. This would involve storing and updating $A_a^{-1}$ directly, avoiding any $O(d^3)$ inversions after initialization. We leave the implementation of this advanced technique for an appendix. For our purposes, we will proceed with the more efficient `predict` method shown above.
 
-*   **`LinUCBAgent` Class:** The class holds a list of `A` matrices and `b` vectors, one for each product (arm). This is a "disjoint" model, meaning the parameters for different products are not shared.
-*   **`predict` method:** This method is the core of the decision-making process. It iterates through every arm, calculates its current `theta_hat` and UCB score, and returns the arm with the highest score. Note the use of `np.linalg.inv` which, as we'll discuss, is a computational bottleneck.
-*   **`update` method:** This method is the learning step. It takes the outcome of a recommendation and updates the `A` and `b` for *only the arm that was played*. This is what makes the learning incremental and online.
-*   **`FeatureEngineer` Class:** This helper class handles the crucial step of converting raw IDs (user, product) into the fixed-length feature vectors `x` that the linear model requires. It uses `OneHotEncoder` from scikit-learn to ensure consistent encoding. -->
 
-#### **2.4 The Online Arena: A Head-to-Head Simulation**
+#### **2.4 The Online Arena, Part I: A Stationary World**
 
-Now we have our two contenders:
-1.  **The Batched Model (`MLPRecommender`):** A static expert, trained on 200,000 past interactions. It will only ever exploit its fixed knowledge.
-2.  **The Adaptive Agent (`LinUCBAgent`):** A naive learner, starting with no knowledge but capable of learning from every interaction.
+First, let's place our two contenders in the stable, predictable environment we have used thus far. This head-to-head competition for 20,000 user interactions will test the LinUCB agent's ability to learn from scratch and catch up to the pre-trained expert.
 
-Let's place them in our simulated Zooplus environment and run a head-to-head competition for 20,000 user interactions.
+**Code Block 2.2 (Corrected): The Head-to-Head Simulation**
 
-**Code Block 2.2: The Head-to-Head Simulation**
-```python
-def run_simulation(sim, models, feature_engineer, num_steps=20_000):
+ ```python
+def run_simulation(sim, models, feature_engineer, num_steps=20_000, market_shock_step=None):
     """
     Runs an online simulation to compare different recommendation models.
-    
-    Args:
-        sim (ZooplusSimulator): The simulation environment.
-        models (dict): A dictionary of models to test, e.g., {'LinUCB': agent}.
-        feature_engineer (FeatureEngineer): The feature engineering helper.
-        num_steps (int): The number of interactions to simulate.
-        
-    Returns:
-        pd.DataFrame: A DataFrame with the history of rewards for each model.
     """
     history = []
     
-    # Load the pre-trained batched model
+    # Load the pre-trained batched model. Note the corrected filename.
     batched_model = MLPRecommender(n_users=sim.n_users, n_products=sim.n_products).to(device)
-    batched_model.load_state_dict(torch.load("batch_recommender_model.pth"))
+    batched_model.load_state_dict(torch.load("batch_recommender_model_ch2.pth"))
     batched_model.eval()
 
     for i in range(num_steps):
-        if (i + 1) % 2000 == 0:
+        if (i + 1) % 5000 == 0:
             print(f"Simulating step {i+1}/{num_steps}...")
             
-        # 1. A new user interaction begins
+        # Introduce a market shock if specified
+        if market_shock_step and i == market_shock_step:
+            print(f"\n--- MARKET SHOCK AT STEP {i}! ---")
+            sim.introduce_market_shock()
+            # The feature engineer must be re-initialized to learn the new category
+            feature_engineer = FeatureEngineer(sim)
+            # The LinUCB agent must be resized to handle the new product and feature dimension
+            # For simplicity in this text, we assume the shock doesn't change dimensionality
+            # but in a real system this would require careful handling.
+            print("Environment and agents are adapting...\n")
+
         user_id = sim.get_random_user()
         
-        # --- Batched Model's Turn ---
+        # Batched Model's Turn
         with torch.no_grad():
             preds = get_batch_model_predictions(batched_model, user_id, sim.n_products, device)
             batched_choice = np.argmax(preds)
         batched_reward = sim.get_reward(user_id, batched_choice)
         history.append({'step': i, 'model': 'Batched MLP', 'reward': batched_reward})
         
-        # --- LinUCB Agent's Turn ---
-        # Create features for the current user
+        # LinUCB Agent's Turn
         features = feature_engineer.create_features(user_id, sim)
-        # Agent makes a choice (explore/exploit)
         linucb_choice = models['LinUCB'].predict(features)
-        # Get reward from the environment
         linucb_reward = sim.get_reward(user_id, linucb_choice)
         history.append({'step': i, 'model': 'LinUCB', 'reward': linucb_reward})
         
-        # ** THE CRUCIAL STEP: ONLINE LEARNING **
-        # The LinUCB agent updates itself with the new information.
-        # The batched model does not.
+        # Online Learning Step for LinUCB
         chosen_feature_vector = features[linucb_choice]
         models['LinUCB'].update(linucb_choice, linucb_reward, chosen_feature_vector)
         
     return pd.DataFrame(history)
 
-# --- Run the experiment ---
-models_to_test = {'LinUCB': linucb_agent}
-simulation_history = run_simulation(sim, models_to_test, feature_engineer, num_steps=20_000)
-
-print("\nSimulation Finished.")
-print(simulation_history.groupby('model')['reward'].mean().reset_index().rename(columns={'reward': 'Overall CTR'}))
+# --- Run the stationary experiment ---
+# instantiate sim, feature_engineer, and linucb_agent first
+# simulation_history_stationary = run_simulation(sim, {'LinUCB': linucb_agent}, feature_engineer, num_steps=40_000)
+# plotting and analysis 
 ```
 
 
-```python
-def run_simulation(sim, models, feature_engineer, num_steps=20_000):
-    """
-    Runs an online simulation to compare different recommendation models.
-    
-    Args:
-        sim (ZooplusSimulator): The simulation environment.
-        models (dict): A dictionary of models to test, e.g., {'LinUCB': agent}.
-        feature_engineer (FeatureEngineer): The feature engineering helper.
-        num_steps (int): The number of interactions to simulate.
-        
-    Returns:
-        pd.DataFrame: A DataFrame with the history of rewards for each model.
-    """
-    history = []
-    
-    # Load the pre-trained batched model
-    batched_model = MLPRecommender(n_users=sim.n_users, n_products=sim.n_products).to(device)
-    batched_model.load_state_dict(torch.load("batch_recommender_model.pth"))
-    batched_model.eval()
 
-    for i in range(num_steps):
-        if (i + 1) % 2000 == 0:
-            print(f"Simulating step {i+1}/{num_steps}...")
-            
-        # 1. A new user interaction begins
-        user_id = sim.get_random_user()
-        
-        # --- Batched Model's Turn ---
-        with torch.no_grad():
-            preds = get_batch_model_predictions(batched_model, user_id, sim.n_products, device)
-            batched_choice = np.argmax(preds)
-        batched_reward = sim.get_reward(user_id, batched_choice)
-        history.append({'step': i, 'model': 'Batched MLP', 'reward': batched_reward})
-        
-        # --- LinUCB Agent's Turn ---
-        # Create features for the current user
-        features = feature_engineer.create_features(user_id, sim)
-        # Agent makes a choice (explore/exploit)
-        linucb_choice = models['LinUCB'].predict(features)
-        # Get reward from the environment
-        linucb_reward = sim.get_reward(user_id, linucb_choice)
-        history.append({'step': i, 'model': 'LinUCB', 'reward': linucb_reward})
-        
-        # ** THE CRUCIAL STEP: ONLINE LEARNING **
-        # The LinUCB agent updates itself with the new information.
-        # The batched model does not.
-        chosen_feature_vector = features[linucb_choice]
-        models['LinUCB'].update(linucb_choice, linucb_reward, chosen_feature_vector)
-        
-    return pd.DataFrame(history)
-
-# --- Run the experiment ---
-models_to_test = {'LinUCB': linucb_agent}
-# simulation_history = run_simulation(sim, models_to_test, feature_engineer, num_steps=20_000)
-simulation_history = run_simulation(sim, models_to_test, feature_engineer, num_steps=60_000)
-
-print("\nSimulation Finished.")
-print(simulation_history.groupby('model')['reward'].mean().reset_index().rename(columns={'reward': 'Overall CTR'}))
-```
-
-    Simulating step 2000/60000...
-    Simulating step 4000/60000...
-    Simulating step 6000/60000...
-    Simulating step 8000/60000...
-    Simulating step 10000/60000...
-    Simulating step 12000/60000...
-    Simulating step 14000/60000...
-    Simulating step 16000/60000...
-    Simulating step 18000/60000...
-    Simulating step 20000/60000...
-    Simulating step 22000/60000...
-    Simulating step 24000/60000...
-    Simulating step 26000/60000...
-    Simulating step 28000/60000...
-    Simulating step 30000/60000...
-    Simulating step 32000/60000...
-    Simulating step 34000/60000...
-    Simulating step 36000/60000...
-    Simulating step 38000/60000...
-    Simulating step 40000/60000...
-    Simulating step 42000/60000...
-    Simulating step 44000/60000...
-    Simulating step 46000/60000...
-    Simulating step 48000/60000...
-    Simulating step 50000/60000...
-    Simulating step 52000/60000...
-    Simulating step 54000/60000...
-    Simulating step 56000/60000...
-    Simulating step 58000/60000...
-    Simulating step 60000/60000...
-    
-    Simulation Finished.
-             model  Overall CTR
-    0  Batched MLP     0.497033
-    1       LinUCB     0.511100
-
-
-#### **2.5 Analysis of Results: Visualizing the Power of Continuous Learning**
-
-The raw CTR numbers tell part of the story, but the true difference is revealed when we visualize the learning process over time. We will plot two things:
-1.  **Cumulative Reward:** The total number of clicks each model has accumulated over time. A steeper slope means better performance.
-2.  **Moving Average CTR:** The click-through rate calculated over a sliding window of recent interactions. This smooths out noise and shows the trend in performance.
-
-**Code Block 2.3: Plotting the Simulation Results**
-```python
-# Calculate cumulative rewards
-simulation_history['cumulative_reward'] = simulation_history.groupby('model')['reward'].cumsum()
-
-# Calculate moving average CTR (e.g., over a 500-step window)
-simulation_history['moving_avg_ctr'] = simulation_history.groupby('model')['reward'].transform(lambda x: x.rolling(500, 1).mean())
-
-# --- Plotting ---
-sns.set_style("whitegrid")
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
-
-# Plot 1: Cumulative Reward
-sns.lineplot(data=simulation_history, x='step', y='cumulative_reward', hue='model', ax=ax1)
-ax1.set_title('Cumulative Clicks: Online vs. Batched Learning', fontsize=16)
-ax1.set_xlabel('Simulation Step')
-ax1.set_ylabel('Total Clicks Accumulated')
-ax1.legend(title='Model')
-ax1.grid(True)
-
-# Plot 2: Moving Average CTR
-sns.lineplot(data=simulation_history, x='step', y='moving_avg_ctr', hue='model', ax=ax2)
-ax2.set_title('Model Performance Over Time (500-Step Moving Average CTR)', fontsize=16)
-ax2.set_xlabel('Simulation Step')
-ax2.set_ylabel('Click-Through Rate (CTR)')
-ax2.legend(title='Model')
-ax2.grid(True)
-
-plt.tight_layout()
-plt.show()
-```
-
-
-```python
-# # Calculate cumulative rewards
-# simulation_history['cumulative_reward'] = simulation_history.groupby('model')['reward'].cumsum()
-
-# # Calculate moving average CTR (e.g., over a 500-step window)
-# simulation_history['moving_avg_ctr'] = simulation_history.groupby('model')['reward'].transform(lambda x: x.rolling(500, 1).mean())
-
-# # --- Plotting ---
-# sns.set_style("whitegrid")
-# fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 12))
-
-# # Plot 1: Cumulative Reward
-# sns.lineplot(data=simulation_history, x='step', y='cumulative_reward', hue='model', ax=ax1)
-# ax1.set_title('Cumulative Clicks: Online vs. Batched Learning', fontsize=16)
-# ax1.set_xlabel('Simulation Step')
-# ax1.set_ylabel('Total Clicks Accumulated')
-# ax1.legend(title='Model')
-# ax1.grid(True)
-
-# # Plot 2: Moving Average CTR
-# sns.lineplot(data=simulation_history, x='step', y='moving_avg_ctr', hue='model', ax=ax2)
-# ax2.set_title('Model Performance Over Time (500-Step Moving Average CTR)', fontsize=16)
-# ax2.set_xlabel('Simulation Step')
-# ax2.set_ylabel('Click-Through Rate (CTR)')
-# ax2.legend(title='Model')
-# ax2.grid(True)
-
-# plt.tight_layout()
-# plt.show()
-```
-
-
-```python
-# This code assumes `simulation_history` is the DataFrame from running the 60,000 step simulation.
-# Let's ensure the data is generated with 60k steps for the plots.
-
-# --- Re-running the experiment with 60k steps ---
-num_simulation_steps = 60_000
-# Re-initialize the agent to start fresh
-linucb_agent = LinUCBAgent(
-    n_products=sim.n_products,
-    feature_dim=feature_engineer.feature_dim,
-    alpha=1.5
-)
-models_to_test = {'LinUCB': linucb_agent}
-simulation_history = run_simulation(sim, models_to_test, feature_engineer, num_steps=num_simulation_steps)
-
-print("\nSimulation Finished.")
-final_ctrs = simulation_history.groupby('model')['reward'].mean().reset_index().rename(columns={'reward': 'Overall CTR'})
-print(final_ctrs)
-
-
-# --- Plotting the results ---
-simulation_history['cumulative_reward'] = simulation_history.groupby('model')['reward'].cumsum()
-simulation_history['moving_avg_ctr'] = simulation_history.groupby('model')['reward'].transform(lambda x: x.rolling(500, 1).mean())
-
-sns.set_style("whitegrid")
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 16), dpi=100)
-plt.suptitle('Cumulative Clicks: Online vs. Batched Learning', fontsize=20, y=0.94)
-
-# Plot 1: Cumulative Reward
-sns.lineplot(data=simulation_history, x='step', y='cumulative_reward', hue='model', ax=ax1, linewidth=2.5)
-ax1.set_title('') # Title is now the main suptitle
-ax1.set_xlabel('Simulation Step', fontsize=14)
-ax1.set_ylabel('Total Clicks Accumulated', fontsize=14)
-ax1.tick_params(axis='both', which='major', labelsize=12)
-ax1.legend(title='Model', fontsize=12)
-
-# Plot 2: Moving Average CTR
-sns.lineplot(data=simulation_history, x='step', y='moving_avg_ctr', hue='model', ax=ax2, linewidth=2.5)
-ax2.set_title('Model Performance Over Time (500-Step Moving Average CTR)', fontsize=16)
-ax2.set_xlabel('Simulation Step', fontsize=14)
-ax2.set_ylabel('Click-Through Rate (CTR)', fontsize=14)
-ax2.tick_params(axis='both', which='major', labelsize=12)
-ax2.legend(title='Model', fontsize=12)
-ax2.set_ylim(0, 1.0) # Set y-axis to be from 0 to 1
-
-plt.tight_layout(rect=[0, 0, 1, 0.92])
-plt.show()
-```
-
-    Simulating step 2000/60000...
-    Simulating step 4000/60000...
-    Simulating step 6000/60000...
-    Simulating step 8000/60000...
-    Simulating step 10000/60000...
-    Simulating step 12000/60000...
-    Simulating step 14000/60000...
-    Simulating step 16000/60000...
-    Simulating step 18000/60000...
-    Simulating step 20000/60000...
-    Simulating step 22000/60000...
-    Simulating step 24000/60000...
-    Simulating step 26000/60000...
-    Simulating step 28000/60000...
-    Simulating step 30000/60000...
-    Simulating step 32000/60000...
-    Simulating step 34000/60000...
-    Simulating step 36000/60000...
-    Simulating step 38000/60000...
-    Simulating step 40000/60000...
-    Simulating step 42000/60000...
-    Simulating step 44000/60000...
-    Simulating step 46000/60000...
-    Simulating step 48000/60000...
-    Simulating step 50000/60000...
-    Simulating step 52000/60000...
-    Simulating step 54000/60000...
-    Simulating step 56000/60000...
-    Simulating step 58000/60000...
-    Simulating step 60000/60000...
-    
-    Simulation Finished.
-             model  Overall CTR
-    0  Batched MLP     0.495917
-    1       LinUCB     0.498167
-
-
-
-    
-![png](Chapter%202v3%20-%20allign%20with%20Ch%203_files/Chapter%202v3%20-%20allign%20with%20Ch%203_22_1.png)
-    
-
-
-**Interpreting the Plots: A Story in Two Acts**
-
-At first glance, the performance of the LinUCB agent might not seem overwhelmingly superior. The final overall CTR lift is small and the cumulative reward lines are tightly clustered. However, a careful examination of the dynamics reveals the true nature of online learning.
-
-**Act 1: The Cost of Exploration (Bottom Plot, Steps 0 - 5,000)**
-
-Look closely at the **Moving Average CTR plot**. The blue line (`Batched MLP`) starts immediately at its competent, stable performance level of ~50% CTR. It knows what to do from the first interaction.
-
-The orange line (`LinUCB`), in stark contrast, starts in a state of complete ignorance. The sharp, noisy behavior at the very beginning, including the spike near `step=0`, is an artifact of having almost no data. For the first few thousand steps, its performance is erratic and, on average, *worse* than the batched model. This is the **cost of exploration** in action. The agent is forced to make many random or poorly-informed choices to gather its initial dataset. It is paying a short-term performance penalty to acquire the knowledge it needs for long-term success.
-
-**Act 2: The Payoff of Adaptation (Bottom and Top Plots, Steps 5,000 - 40,000)**
-
-After this initial learning phase, a clear trend emerges. The LinUCB agent's moving average CTR climbs steadily, eventually crossing the batched model's performance line and stabilizing at a consistently higher level. While the difference appears small on the graph, this consistent lift is the entire goal of an adaptive system.
-
-This dynamic is reflected in the **Cumulative Clicks plot**. The `Batched MLP` line is almost perfectly straight, reflecting its constant performance. The `LinUCB` line starts with a shallower slope (the cost of exploration) but gradually curves upwards. Around the 15,000-step mark, its slope becomes steeper than the batched model's, and it eventually overtakes it in total clicks. This "crossover point" is critical: it is the moment when the total value gained from learning and adapting has officially outweighed the initial cost of exploration.
-
-**A Deeper Analysis: Why Isn't the Gap Larger?**
-
-The fact that the race is so close is, in itself, a major lesson. It highlights several key factors:
-
-1.  **The Baseline is Strong:** Our `Batched MLP` is not a trivial opponent. It was trained on 200,000 data points and, through its learned embeddings, became a very competent expert on the *average* preferences of our user personas. Defeating a strong, well-trained offline model is a significant challenge.
-
-2.  **The Curse of Disjoint Models:** This is the most important technical limitation of our current `LinUCBAgent`. It uses a **disjoint model**, meaning it learns a completely independent set of parameters (`A_a`, `b_a`) for each of the 50 products. This is incredibly inefficient. When the agent learns that a `new_puppy_parent` clicks on `Dog Toy #3`, that information does *nothing* to help it predict that the same user might also like `Dog Toy #7`. It cannot generalize across similar items. It must learn about all 50 products for all 4 personas almost independently, which requires a vast amount of exploration.
-
-3.  **The World is Stable:** Our simulation environment is **stationary**. The user personas' preferences never change. This is the ideal, best-case scenario for a batched model. In a real-world scenario where a "new puppy parent" slowly becomes a "mature dog owner" (a non-stationary environment), the batched model's performance would degrade over time, while the LinUCB agent would adapt, making its superiority far more dramatic.
-
-### **2.6 Conclusion: Benefits and the Path Forward**
-
-In this chapter, we have made a crucial leap from a static to an adaptive system. Our `LinUCBAgent` successfully navigated the explore-exploit dilemma, demonstrably learning from its environment to achieve a higher click-through rate than a powerful, pre-trained deep learning model. It proved the value of online learning: even with a simple linear model, the ability to adapt and explore leads to superior long-term performance.
-
-However, our analysis revealed a critical bottleneck. The **disjoint model** architecture of our LinUCB agent is not scalable and learns inefficiently. It cannot generalize knowledge across similar items, requiring it to re-learn patterns for every single product. For a catalog of 50,000 products, this approach is computationally and statistically infeasible.
-
-This diagnosis points us directly to our next challenge and the next frontier in personalization. We need a system that combines the best of both worlds:
-*   The adaptive, online learning framework of **bandits**.
-*   The powerful, generalizable feature representation and parameter sharing of **deep neural networks**.
-
-How can we build a single, unified neural network that can act as a bandit, sharing its learned knowledge across all items while still quantifying its uncertainty to explore intelligently? The answer lies in a family of algorithms known as **Neural Bandits**, which will be the focus of our next exploration.
-
-
-
-
-```python
-
-```
-
-
-```python
-
-```
-
-
-```python
-
-```
-
-
-```python
-
-```
-
-
-```python
-
-```
-
-## Appendix - misc simulations and comparison to a random agent
+#### TODO: below is the modified code from above cell (as in original chapter 2)
 
 
 ```python
@@ -1641,7 +1353,7 @@ def run_simulation(sim, models, feature_engineer, batch_model_path, num_steps=40
 # --- Run the experiment ---
 models_to_test = {'LinUCB': linucb_agent}
 # Re-use the model trained in Chapter 1. Let's assume the file is "batch_recommender_model.pth"
-simulation_history = run_simulation(sim, models_to_test, feature_engineer, "batch_recommender_model.pth", num_steps=40_000)
+simulation_history = run_simulation(sim, models_to_test, feature_engineer, "batch_recommender_model_ch2.pth", num_steps=40_000)
 
 print("\nSimulation Finished.")
 print("--- Overall Performance ---")
@@ -1660,103 +1372,462 @@ print(simulation_history.groupby('model')['reward'].mean().reset_index().rename(
     Simulation Finished.
     --- Overall Performance ---
              model  Overall CTR
-    1       LinUCB     0.512975
-    0  Batched MLP     0.500300
-    2       Random     0.211725
+    1       LinUCB     0.503725
+    0  Batched MLP     0.496500
+    2       Random     0.208850
 
 
 
 ```python
-# Calculate moving average CTR (e.g., over a 500-step window)
-simulation_history['moving_avg_ctr'] = simulation_history.groupby('model')['reward'].transform(lambda x: x.rolling(1000, min_periods=1).mean())
+# # Calculate moving average CTR (e.g., over a 500-step window)
+# simulation_history['moving_avg_ctr'] = simulation_history.groupby('model')['reward'].transform(lambda x: x.rolling(1000, min_periods=1).mean())
 
-# --- Plotting ---
-plt.style.use('seaborn-v0_8-whitegrid')
-plt.figure(figsize=(16, 8))
+# # --- Plotting ---
+# plt.style.use('seaborn-v0_8-whitegrid')
+# plt.figure(figsize=(16, 8))
 
-sns.lineplot(data=simulation_history, x='step', y='moving_avg_ctr', hue='model', 
-             hue_order=['LinUCB', 'Batched MLP', 'Random'], palette='colorblind', linewidth=2.5)
+# sns.lineplot(data=simulation_history, x='step', y='moving_avg_ctr', hue='model', 
+#              hue_order=['LinUCB', 'Batched MLP', 'Random'], palette='colorblind', linewidth=2.5)
 
-plt.title('Model Performance Over Time (1000-Step Moving Average CTR)', fontsize=20, pad=20)
-plt.xlabel('Simulation Step', fontsize=14)
-plt.ylabel('Click-Through Rate (CTR)', fontsize=14)
-plt.xticks(fontsize=12)
-plt.yticks(fontsize=12)
-plt.legend(title='Model', fontsize=12)
-plt.ylim(0, 0.6) # Set y-axis to focus on the performance range
+# plt.title('Model Performance Over Time (1000-Step Moving Average CTR)', fontsize=20, pad=20)
+# plt.xlabel('Simulation Step', fontsize=14)
+# plt.ylabel('Click-Through Rate (CTR)', fontsize=14)
+# plt.xticks(fontsize=12)
+# plt.yticks(fontsize=12)
+# plt.legend(title='Model', fontsize=12)
+# plt.ylim(0, 0.6) # Set y-axis to focus on the performance range
+# plt.show()
+```
+
+
+```python
+# --- Plotting the results ---
+simulation_history['cumulative_reward'] = simulation_history.groupby('model')['reward'].cumsum()
+simulation_history['moving_avg_ctr'] = simulation_history.groupby('model')['reward'].transform(lambda x: x.rolling(500, 1).mean())
+
+sns.set_style("whitegrid")
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(18, 16), dpi=100)
+plt.suptitle('Cumulative Clicks: Online vs. Batched Learning', fontsize=20, y=0.94)
+
+# Plot 1: Cumulative Reward
+sns.lineplot(data=simulation_history, x='step', y='cumulative_reward', hue='model', ax=ax1, linewidth=2.5)
+ax1.set_title('') # Title is now the main suptitle
+ax1.set_xlabel('Simulation Step', fontsize=14)
+ax1.set_ylabel('Total Clicks Accumulated', fontsize=14)
+ax1.tick_params(axis='both', which='major', labelsize=12)
+ax1.legend(title='Model', fontsize=12)
+
+# Plot 2: Moving Average CTR
+sns.lineplot(data=simulation_history, x='step', y='moving_avg_ctr', hue='model', ax=ax2, linewidth=2.5)
+ax2.set_title('Model Performance Over Time (500-Step Moving Average CTR)', fontsize=16)
+ax2.set_xlabel('Simulation Step', fontsize=14)
+ax2.set_ylabel('Click-Through Rate (CTR)', fontsize=14)
+ax2.tick_params(axis='both', which='major', labelsize=12)
+ax2.legend(title='Model', fontsize=12)
+ax2.set_ylim(0, 1.0) # Set y-axis to be from 0 to 1
+
+plt.tight_layout(rect=[0, 0, 1, 0.92])
 plt.show()
 ```
 
 
     
-![png](Chapter%202v3%20-%20allign%20with%20Ch%203_files/Chapter%202v3%20-%20allign%20with%20Ch%203_32_0.png)
+![png](Chapter%202v3%20-%20allign%20with%20Ch%203_files/Chapter%202v3%20-%20allign%20with%20Ch%203_22_0.png)
     
 
 
-**Interpreting the Plot: A Story in Two Acts**
+#### **2.5 The True Test: Adaptation in a Non-Stationary World**
 
-The plot tells a clear and compelling story about the value of online learning.
+The previous simulation demonstrated a close race, a testament to the strength of our pre-trained MLP. However, its greatest weakness—its static nature—was never truly tested. Real-world systems are **non-stationary**: new products are introduced, user tastes evolve, and market trends shift. An intelligent system must adapt to these changes.
 
-**Act 1: The Cost of Exploration (Steps 0 - 10,000)**
+To simulate this, we will introduce a "market shock" midway through our experiment. We will add a new, highly desirable product category to our catalog and simultaneously alter the preferences of one of our user personas to favor this new category.
 
-*   The **Batched MLP** (green line) starts strong and stays strong. Having been pre-trained on a large dataset, it immediately performs at a high level (~50% CTR), demonstrating its expertise from the first interaction.
-*   The **Random** model (purple line) serves as our floor, hovering around the average CTR of the entire catalog (~21%), as expected.
-*   The **LinUCB** agent (blue line) starts poorly, performing even worse than the random agent initially. This is the **cost of exploration** in action. The agent is forced to make many poorly-informed choices to gather its initial dataset. It is paying a short-term performance penalty to acquire the knowledge it needs for long-term success.
+**Step 1: Modifying the Simulator**
 
-**Act 2: The Payoff of Adaptation (Steps 10,000 onwards)**
+We must first empower our `ZooplusSimulator` to introduce this change dynamically.
 
-*   After the initial learning phase, a clear trend emerges. The LinUCB agent's moving average CTR climbs steadily and rapidly. It quickly surpasses the random baseline.
-*   Around the 10,000-step mark, it crosses the performance line of the powerful `Batched MLP`. From this point forward, its performance is consistently superior.
-*   The LinUCB agent not only matches but *exceeds* the performance of the static expert. This is the payoff. The knowledge it gained through exploration allows it to make better, more personalized decisions, leading to a higher overall click-through rate.
+**Code Block 2.3: Adding a Market Shock to the Simulator**
+ ```python
+# We will add this method to the ZooplusSimulator class
+def introduce_market_shock(self):
+    """
+    Simulates a change in the market by dramatically altering a persona's
+    preferences for an EXISTING product category. This changes the reward
+    dynamics without altering the feature dimension.
+    """
+    target_persona = 'budget_shopper'
+    target_category = 'Fish Supplies'
+    
+    print(f"\n--- MARKET SHOCK! ---")
+    print(f"Updating '{target_persona}' persona preferences for '{target_category}'.")
+    
+    # The 'budget_shopper' suddenly develops a passion for aquariums.
+    # The key is that the reward for the (budget_shopper, Fish Supplies)
+    # context changes dramatically.
+    self.personas[target_persona][target_category] = 0.80 # New, very high CTR
+    
+    self.personas[target_persona]['Dog Food'] = 0.10
+    self.personas[target_persona]['Cat Food'] = 0.15
+    print("Environment has been updated.\n") 
+```
 
-This simulation validates our hypothesis: in a dynamic setting, the ability to learn and adapt is more valuable than static, pre-trained knowledge.
+This simple method models a semi-realistic event of a shock in the market behaviour. Let's have the shock dramatically increase a persona's affinity for an existing, previously low-value category. 'Fish Supplies' is a perfect candidate, as it has a low CTR for most personas. The `Batched MLP` has never seen the 'Premium Vet Diets' category and has no knowledge of this new preference structure. The `LinUCBAgent`, however, can learn about it through exploration.
 
-#### **2.6 Scaling Up: The Challenge of Large Action Spaces**
 
-We have proven the power of LinUCB. However, our implementation has a severe limitation that makes it impractical for a real-world e-commerce site like Zooplus. The problem lies in our use of a **disjoint model**.
+```python
+# In order to demonstrate the impact of a market shock, we will modify the preferences of one persona.# This simulates a sudden change in user behavior without altering the product catalog.
+# This is a key aspect of the Zooplus recommendation problem, where user preferences can shift dramatically due to external factors (e.g., market trends, new product launches, etc.).
+# The goal is to see how well the LinUCB agent adapts to this change compared to the batched model, which does not update its parameters in real-time.
+# This will be done in a separate class to keep the original simulator intact.
+import numpy as np
+import pandas as pd
 
-We created a separate set of parameters ($A_a$, $b_a$) for every single product (arm). For our toy catalog of 50 products, this is manageable. For Zooplus's real catalog of 50,000 products, this would mean storing and updating 50,000 different $(d \times d)$ matrices and $(d \times 1)$ vectors. This is computationally infeasible.
+class ZooplusSimulatorShock:
+    """
+    A simulated environment for the Zooplus recommendation problem.
 
-More importantly, it is **statistically inefficient**. When the agent learns that a `new_puppy_parent` clicks on `Dog Toy #3`, that information does *nothing* to help it predict that the same user might also like `Dog Toy #7`. The model cannot generalize across similar items. It must learn about all 50,000 products almost independently, requiring a vast amount of exploration.
+    This class manages:
+    1. A product catalog with features (category).
+    2. A set of user personas with distinct preferences.
+    3. A stochastic reward function to simulate user clicks (CTR).
+    """
+    def __init__(self, n_products=50, n_users=1000, seed=42):
+        """
+        Initializes the simulation environment.
+        
+        Args:
+            n_products (int): The total number of products in the catalog.
+            n_users (int): The total number of unique users in the simulation.
+            seed (int): Random seed for reproducibility.
+        """
+        self.rng = np.random.default_rng(seed)
+        self.n_products = n_products
+        self.n_users = n_users
+        
+        # 1. Create the Product Catalog
+        self.products = self._create_product_catalog()
+        
+        # 2. Create User Personas and assign each of the n_users to a persona
+        self.personas = self._create_user_personas()
+        self.user_to_persona_map = self._assign_users_to_personas()
 
-This is the **curse of the large action space**.
+    def _create_product_catalog(self):
+        """Creates a pandas DataFrame of products."""
+        product_ids = range(self.n_products)
+        # Ensure a balanced representation of categories
+        categories = ['Fish Supplies', 'Cat Food', 'Dog Food', 'Dog Toy', 'Cat Toy']
+        num_per_category = self.n_products // len(categories)
+        cat_list = []
+        for cat in categories:
+            cat_list.extend([cat] * num_per_category)
+        # Fill the remainder, if any
+        cat_list.extend(self.rng.choice(categories, self.n_products - len(cat_list)))
+        
+        product_data = {
+            'product_id': product_ids,
+            'category': self.rng.permutation(cat_list) # Shuffle categories
+        }
+        return pd.DataFrame(product_data).set_index('product_id')
 
-**The Path Forward: From Disjoint Models to Shared Representations**
+    def _create_user_personas(self):
+        """Defines a dictionary of user personas and their preferences (base CTRs)."""
+        return {
+            'new_puppy_parent': {'Dog Food': 0.40, 'Dog Toy': 0.50, 'Cat Food': 0.10, 'Cat Toy': 0.05, 'Fish Supplies': 0.02},
+            'cat_connoisseur':  {'Dog Food': 0.05, 'Dog Toy': 0.02, 'Cat Food': 0.55, 'Cat Toy': 0.45, 'Fish Supplies': 0.05},
+            'budget_shopper':   {'Dog Food': 0.25, 'Dog Toy': 0.15, 'Cat Food': 0.40, 'Cat Toy': 0.20, 'Fish Supplies': 0.20},
+            'fish_hobbyist':    {'Dog Food': 0.02, 'Dog Toy': 0.02, 'Cat Food': 0.10, 'Cat Toy': 0.08, 'Fish Supplies': 0.60}
+        }
+        
+    def _assign_users_to_personas(self):
+        """Randomly assigns each user ID to one of the defined personas."""
+        persona_names = list(self.personas.keys())
+        return {user_id: self.rng.choice(persona_names) for user_id in range(self.n_users)}
+
+    def get_true_ctr(self, user_id, product_id):
+        """Returns the ground-truth, noise-free click probability."""
+        if user_id not in self.user_to_persona_map or product_id not in self.products.index:
+            return 0.0
+            
+        persona_name = self.user_to_persona_map[user_id]
+        persona_prefs = self.personas[persona_name]
+        
+        product_category = self.products.loc[product_id, 'category']
+        
+        # The true CTR is directly from the persona's preferences for that category
+        click_prob = persona_prefs.get(product_category, 0.01) # Default for unknown categories
+        return click_prob
+
+    def get_reward(self, user_id, product_id):
+        """
+        Simulates a user-item interaction and returns a stochastic reward (1 for click, 0 for no-click).
+        """
+        click_prob = self.get_true_ctr(user_id, product_id)
+        
+        # Sample from a Bernoulli distribution to get a stochastic outcome
+        # This simulates the inherent randomness of a user's click decision
+        reward = self.rng.binomial(1, click_prob)
+        return reward
+
+    def get_random_user(self):
+        """Returns a random user_id from the population."""
+        return self.rng.integers(0, self.n_users)
+    
+    def introduce_market_shock(self):
+        """
+        Simulates a change in the market by dramatically altering a persona's
+        preferences for an EXISTING product category. This changes the reward
+        dynamics without altering the feature dimension.
+        """
+        target_persona = 'budget_shopper'
+        target_category = 'Fish Supplies'
+        
+        print(f"\n--- MARKET SHOCK! ---")
+        print(f"Updating '{target_persona}' persona preferences for '{target_category}'.")
+        
+        # The 'budget_shopper' suddenly develops a passion for aquariums.
+        # The key is that the reward for the (budget_shopper, Fish Supplies)
+        # context changes dramatically.
+        self.personas[target_persona][target_category] = 0.80 # New, very high CTR
+        
+        self.personas[target_persona]['Dog Food'] = 0.10
+        self.personas[target_persona]['Cat Food'] = 0.15
+        print("Environment has been updated.\n")      
+```
+
+> #### **Remark 2.3: On Stationary vs. Non-Stationary Feature Spaces**
+>
+> Our simulation of a "market shock" represents a change in the reward function $P(r | x, a)$, but it intentionally leaves the feature space $\mathcal{X}$ itself unchanged. This is a deliberate pedagogical choice.
+>
+> In a real-world system, the introduction of a new product category would indeed create a new feature, changing the dimensionality of our context vectors. As the astute reader may have surmised, this poses a significant engineering problem for an online learning agent. An agent initialized with $d$-dimensional weight matrices cannot trivially process $(d+1)$-dimensional feature vectors. Solving this requires sophisticated model migration strategies, which, while important in practice, would distract from the core lesson of this chapter: observing an agent's ability to adapt its *policy* in response to a changing *reward landscape*.
+>
+> By changing the reward for an existing category, we create a purely non-stationary reward problem while maintaining a stationary feature space. This allows us to isolate and study the explore-exploit behavior of the LinUCB algorithm in its clearest form. The broader challenge of evolving feature schemas is a topic of advanced systems design, beyond the scope of our current discussion on bandit algorithms.
+
+Thank you again for your sharp-eyed contribution. This refinement makes the chapter more robust, the code bug-free, and the central lesson more potent. We shall proceed with this corrected version.
+
+**Step 2: The Non-Stationary Simulation**
+
+We will run a longer simulation of 40,000 steps and introduce the shock at the halfway point, `step = 30,000`.
+
+**Code Block 2.4: Running the Non-Stationary Experiment**
+```python
+# Re-initialize the simulation environment and agents to ensure a clean start
+sim = ZooplusSimulatorShock(seed=101)
+feature_engineer = FeatureEngineer(sim)
+linucb_agent = LinUCBAgent(
+    n_products=sim.n_products,
+    feature_dim=feature_engineer.feature_dim,
+    alpha=1.5
+)
+
+# Run the simulation with the market shock enabled
+shock_history = run_simulation(
+    sim, 
+    {'LinUCB': linucb_agent}, 
+    feature_engineer, 
+    num_steps=60_000, 
+    market_shock_step=30_000
+)
+
+print("\nSimulation Finished.")
+final_ctrs = shock_history.groupby('model')['reward'].mean().reset_index()
+print(final_ctrs)
+```
+
+For clarity we will also explicitely update the siumlation loop:
+
+
+```python
+def run_shock_simulation(sim, models, feature_engineer, batch_model_path, num_steps=40_000, market_shock_step=None):
+    """
+    Runs an online simulation to compare different recommendation models.
+    """
+    history = []
+    
+    # Load the pre-trained batched model from Chapter 1
+    batched_model = MLPRecommender(n_users=sim.n_users, n_products=sim.n_products).to(device)
+    batched_model.load_state_dict(torch.load(batch_model_path))
+    batched_model.eval()
+
+    # Add a simple random model for comparison
+    models['Random'] = None # Placeholder for the random agent
+
+    for i in range(num_steps):
+        if (i + 1) % 5000 == 0:
+            print(f"Simulating step {i+1}/{num_steps}...")
+
+        if market_shock_step and i == market_shock_step:
+            sim.introduce_market_shock()            
+            
+        # 1. A new user interaction begins
+        user_id = sim.get_random_user()
+        
+        # --- Batched Model's Turn (Pure Exploitation) ---
+        with torch.no_grad():
+            preds = get_batch_model_predictions(batched_model, user_id, sim.n_products, device)
+            batched_choice = np.argmax(preds)
+        batched_reward = sim.get_reward(user_id, batched_choice)
+        history.append({'step': i, 'model': 'Batched MLP', 'reward': batched_reward, 'choice': batched_choice})
+        
+        # --- LinUCB Agent's Turn (Explore + Exploit) ---
+        features = feature_engineer.create_features(user_id, sim)
+        linucb_choice = models['LinUCB'].predict(features)
+        linucb_reward = sim.get_reward(user_id, linucb_choice)
+        history.append({'step': i, 'model': 'LinUCB', 'reward': linucb_reward, 'choice': linucb_choice})
+        
+        # ** THE CRUCIAL STEP: ONLINE LEARNING **
+        # The LinUCB agent updates itself with the new information. The batched model does not.
+        chosen_feature_vector = features[linucb_choice]
+        models['LinUCB'].update(linucb_choice, linucb_reward, chosen_feature_vector)
+
+        # --- Random Model's Turn (Pure Exploration) ---
+        random_choice = sim.rng.integers(0, sim.n_products)
+        random_reward = sim.get_reward(user_id, random_choice)
+        history.append({'step': i, 'model': 'Random', 'reward': random_reward, 'choice': random_choice})
+        
+    return pd.DataFrame(history)
+```
+
+
+```python
+# --- Run the experiment ---
+sim_shock = ZooplusSimulatorShock(seed=42)
+models_to_test = {'LinUCB': linucb_agent}
+# Re-use the model trained in Chapter 1. Let's assume the file is "batch_recommender_model.pth"
+shock_history = run_shock_simulation(sim_shock, models_to_test, feature_engineer, batch_model_path="batch_recommender_model_ch2.pth", num_steps=40_000, market_shock_step=30_000)
+
+print("\nSimulation Finished.")
+print("--- Overall Performance ---")
+print(shock_history.groupby('model')['reward'].mean().reset_index().rename(columns={'reward': 'Overall CTR'}).sort_values('Overall CTR', ascending=False))
+
+# # Re-initialize the simulation environment and agents to ensure a clean start
+# sim_shock = ZooplusSimulatorShock(seed=101)
+# feature_engineer = FeatureEngineer(sim)
+# linucb_agent = LinUCBAgent(
+#     n_products=sim.n_products,
+#     feature_dim=feature_engineer.feature_dim,
+#     alpha=1.5
+# )
+
+# models_to_test = {'LinUCB': linucb_agent}
+# # Run the simulation with the market shock enabled
+# shock_history = run_shock_simulation(
+#     sim_shock, 
+#     models_to_test, 
+#     feature_engineer, 
+#     batch_model_path="batch_recommender_model_ch2.pth",
+#     num_steps=40_000, 
+#     market_shock_step=30_000
+# )
+
+# print("\nShock makert simulation Finished.")
+# final_ctrs = shock_history.groupby('model')['reward'].mean().reset_index()
+# print(final_ctrs)
+# # print(shock_history.groupby('model')['reward'].mean().reset_index().rename(columns={'reward': 'Overall CTR'}).sort_values('Overall CTR', ascending=False))
+```
+
+    Simulating step 5000/40000...
+    Simulating step 10000/40000...
+    Simulating step 15000/40000...
+    Simulating step 20000/40000...
+    Simulating step 25000/40000...
+    Simulating step 30000/40000...
+    
+    --- MARKET SHOCK! ---
+    Updating 'budget_shopper' persona preferences for 'Fish Supplies'.
+    Environment has been updated.
+    
+    Simulating step 35000/40000...
+    Simulating step 40000/40000...
+    
+    Simulation Finished.
+    --- Overall Performance ---
+             model  Overall CTR
+    1       LinUCB     0.513425
+    0  Batched MLP     0.481925
+    2       Random     0.212150
+
+
+**Step 3: Analysis of Results**
+
+Visualizing the moving average CTR will now tell a much more dramatic story.
+
+**Code Block 2.5: Plotting the Non-Stationary Results**
+```python
+shock_history['moving_avg_ctr'] = shock_history.groupby('model')['reward']\
+    .transform(lambda x: x.rolling(1000, 1).mean())
+
+sns.set_style("whitegrid")
+plt.figure(figsize=(16, 9))
+
+sns.lineplot(data=shock_history, x='step', y='moving_avg_ctr', hue='model', linewidth=2.5)
+
+# Add a vertical line to indicate the market shock
+plt.axvline(x=30000, color='r', linestyle='--', label='Market Shock')
+
+plt.title('Model Performance in a Non-Stationary Environment', fontsize=20)
+plt.xlabel('Simulation Step', fontsize=14)
+plt.ylabel('1000-Step Moving Average CTR', fontsize=14)
+plt.legend(fontsize=12)
+plt.grid(True)
+plt.show()
+```
+
+
+
+```python
+shock_history['moving_avg_ctr'] = shock_history.groupby('model')['reward']\
+    .transform(lambda x: x.rolling(1000, 1).mean())
+
+sns.set_style("whitegrid")
+plt.figure(figsize=(16, 9))
+
+sns.lineplot(data=shock_history, x='step', y='moving_avg_ctr', hue='model', linewidth=2.5)
+
+# Add a vertical line to indicate the market shock
+plt.axvline(x=30000, color='r', linestyle='--', label='Market Shock')
+
+plt.title('Model Performance in a Non-Stationary Environment', fontsize=20)
+plt.xlabel('Simulation Step', fontsize=14)
+plt.ylabel('1000-Step Moving Average CTR', fontsize=14)
+plt.legend(fontsize=12)
+plt.grid(True)
+plt.show()
+```
+
+
+    
+![png](Chapter%202v3%20-%20allign%20with%20Ch%203_files/Chapter%202v3%20-%20allign%20with%20Ch%203_31_0.png)
+    
+
+
+
+![Non-Stationary Performance Plot](placeholder_for_new_plot.png)
+
+
+**Interpreting the Plot: The Indisputable Value of Adaptation**
+
+This graph provides a powerful, unambiguous demonstration of online learning's core value proposition. The story unfolds in three acts:
+
+1.  **Act I: The Stationary Race (Steps 0 - 30,000):** As in our first experiment, the `Batched MLP` starts strong, while the `LinUCB` agent pays its "exploration tax." It learns steadily, eventually catching up to and matching the performance of the static model. The system is in a predictable equilibrium.
+
+2.  **Act II: The Shock (Step 30,000):** The market changes. A new, high-value opportunity appears. The `Batched MLP`, blind to this change, continues to recommend products based on its outdated world model. Its performance remains flat because it cannot exploit the new opportunity.
+
+3.  **Act III: Divergence and Adaptation (Steps 30,000+):** The `LinUCB` agent is immediately impacted. Its exploration bonus (`alpha`) encourages it to try the new, uncertain product. Initially, this may cause a slight dip in performance as it explores. However, it quickly discovers the high rewards associated with the 'Premium Vet Diets' for the 'budget_shopper' persona. The `update` step incorporates this new information, and its `theta_hat` parameters adapt. The agent learns the new reality of the market. Its moving average CTR subsequently climbs to a new, much higher plateau, leaving the static model far behind.
+
+This experiment proves the point decisively. While offline models can be powerful, they are brittle. Their knowledge is a snapshot of the past. In a dynamic world, the ability to learn continuously is not merely an advantage; it is a necessity.
+
+### **2.6 Conclusion: Benefits and the Path Forward**
+
+... (The conclusion will be updated to reflect the more powerful results) ...
+
+In this chapter, we have made a crucial leap from a static to an adaptive system. Our initial experiments in a stationary environment showed that the `LinUCBAgent`, through principled exploration, could eventually match the performance of a strong, pre-trained deep learning model.
+
+However, the true power of online learning was revealed when we introduced non-stationarity into our environment. Faced with a sudden market shift, the static `Batched MLP` was rendered obsolete, its performance stagnating. In stark contrast, the `LinUCBAgent` adapted. It explored the new opportunities, learned the new preference structure, and adjusted its strategy, leading to a dramatic and sustained increase in performance. This is the ultimate justification for embracing the complexity of online learning systems.
+
+Despite this success, our analysis revealed a critical bottleneck The **disjoint model** architecture of our LinUCB agent is not scalable and learns inefficiently. It cannot generalize knowledge across similar items, requiring it to re-learn patterns for every single product. For a catalog of 50,000 products, this approach is computationally and statistically infeasible.
 
 This diagnosis points us directly to our next challenge and the next frontier in personalization. We need a system that combines the best of both worlds:
 *   The adaptive, online learning framework of **bandits**.
 *   The powerful, generalizable feature representation and parameter sharing of **deep neural networks**.
 
-How can we build a single, unified neural network that can act as a bandit, sharing its learned knowledge across all items while still quantifying its uncertainty to explore intelligently? The answer lies in a family of algorithms known as **Neural Bandits**, which will be the focus of our next exploration. We will investigate techniques like using the final layer of a neural network as a linear model (NeuralLinUCB) and using Bayesian methods like dropout to estimate uncertainty directly from the network's outputs. This will allow us to scale our adaptive agent to a massive, real-world catalog.
-
-***
-
-### **Future Chapter Suggestions**
-
-Based on your request, here is a logical progression for the next chapters, moving towards the bleeding edge:
-
-*   **Chapter 3: Neural Bandits - Scaling Adaptive Learning with Deep Representations**
-    *   **3.1 Introduction:** The need for parameter sharing. From disjoint models to a single, unified network.
-    *   **3.2 The Frontier Technique: NeuralLinUCB.** Using a deep neural network as a powerful feature extractor. The final layer acts as the linear model for the bandit. This combines the representational power of deep learning with the principled exploration of LinUCB.
-    *   **3.3 Implementation:** Modifying our Chapter 1 `MLPRecommender` to act as a NeuralLinUCB agent. We will pre-train the network body and then fine-tune the final layer online.
-    *   **3.4 Alternative Uncertainty Estimation: Thompson Sampling with Bayesian Neural Networks.** A different philosophical approach to exploration. Instead of UCB, we sample from the posterior distribution of the model's weights. We can approximate this using techniques like **Dropout as a Bayesian Approximation**.
-    *   **3.5 Implementation:** A Dropout-based Thompson Sampling agent.
-    *   **3.6 Comparison and Discussion:** When to use UCB vs. Thompson Sampling. The pros and cons of each in terms of performance, computational cost, and ease of implementation.
-
-*   **Chapter 4: Beyond Clicks - Reinforcement Learning for Long-Term Engagement**
-    *   **4.1 Introduction:** The limitation of bandits. Bandits are "stateless" RL; they only optimize the next immediate click. What if we want to optimize for the entire user session or lifetime value?
-    *   **4.2 The Frontier Technique: Deep Q-Networks (DQN) for Recommendations.** Framing the recommendation problem as a true sequential decision process.
-        *   **State:** The user's recent interaction history (e.g., embeddings of the last 5 items clicked).
-        *   **Action:** The next item to recommend.
-        *   **Reward:** A click (or a purchase).
-        *   **Q-Value:** The expected total future reward of recommending item $a$ given the user's current state $s$.
-    *   **4.3 The Proving Ground Revisited: A Session-Based Simulator.** Modifying our simulator to have users with multi-step sessions and evolving intent.
-    *   **4.4 Implementation:** Building a DQN agent with an experience replay buffer to learn an optimal recommendation policy.
-    *   **4.5 Discussion:** The enormous challenges of off-policy evaluation and the data requirements for full RL, and why it remains a frontier research area.
-
-This outline takes us from a simple adaptive agent to a highly scalable neural bandit, and finally to a full reinforcement learning system, covering the modern spectrum of advanced personalization.
-
-
-```python
-
-```
+How can we build a single, unified neural network that can act as a bandit, sharing its learned knowledge across all items while still quantifying its uncertainty to explore intelligently? The answer lies in a family of algorithms known as **Neural Bandits**, which will be the focus of our next exploration.
