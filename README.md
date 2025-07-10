@@ -6,7 +6,7 @@ These notes represent my ongoing effort to distill, clarify, and rigorously orga
 
 For me, the deep allure of recommendation systems lies at the intersection of human behavior, statistical learning, and high-performance computing. Yet, beneath their practical success lies a rich tapestry of mathematical ideas, from linear algebra and optimization theory to probability and functional analysis. My primary aim in these notes is to traverse this landscape methodically, drawing a clear, unbroken line from first principles to the sophisticated architectures deployed in practice today. 
 
-### Pedagogical Approach
+###  Approach
 
 In organizing these chapters, I have have tried to force myself to a step-by-step-no-skip approach, a structure I believe is essential for building a robust and lasting understanding of any complex subject:
 
