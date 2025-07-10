@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Jupyter checkpoint files
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pth
+*.pyo
+*.pyd
+
+# VSCode, PyCharm etc
+.vscode/
+.idea/
+
+# Environment files
+.env
+*.egg-info/
+*.egg
+
+# Misc
+*.swp
+*.bak
+*.log
