@@ -1,0 +1,116 @@
+### **Chapter 3: Neural Contextual Bandits: Generalization Through Shared Representation**
+
+#### **3.1 The Limits of Disjoint Models and the Need for Generalization**
+
+In our exploration thus far, we have journeyed through two fundamental paradigms of machine learning for recommendation. In Chapter 1, we constructed a `MLPRecommender`, a model endowed with the expressive power of deep learning. It learned rich, non-linear relationships from a large, static dataset, creating effective, generalizable embeddings for users and products. Its crucial flaw, however, was its static nature; it was a creature of the past, unable to adapt to new information without complete retraining.
+
+In Chapter 2, we addressed this inertia by introducing the `LinUCBAgent`, an online learning system grounded in the contextual bandit framework. This agent, learning at every interaction, demonstrated a remarkable ability to adapt and optimize its strategy over time, ultimately outperforming its static counterpart. Yet, it too possessed a critical architectural weakness. Our `LinUCBAgent` was a *disjoint model*. It maintained an independent set of parameters—a matrix $A_a$ and vector $b_a$—for each of the 50 products in our catalog.
+
+Consider the implications of this design. When the agent recommends "Premium Dog Toy A" and observes a click, it updates only the parameters for that specific toy. If it is subsequently asked to evaluate "Deluxe Dog Toy B," it approaches the problem with no transference of knowledge. The insight that this user has an affinity for dog toys remains siloed within the parameters of "Toy A." The model cannot **generalize**.
+
+This is not merely inefficient; it is fundamentally unscalable. In a real-world e-commerce setting with millions of products, maintaining a separate model for each item is computationally infeasible and statistically disastrous. The vast majority of items would be recommended so infrequently that their parameters would never be reliably estimated—a severe form of the cold-start problem.
+
+The path forward must therefore be a synthesis. We need a model that combines the adaptive, principled exploration of a bandit algorithm with the powerful, generalizable representation learning of a neural network. We seek a single, unified model that learns from every interaction to refine a shared understanding of the world, where learning about one dog toy informs its beliefs about *all* dog toys. This chapter is dedicated to the theory and implementation of such a model: the **Neural Bandit**.
+
+#### **3.2 Generalizing the UCB Principle Beyond Linearity**
+
+To build our new agent, we must first return to the theoretical foundation of the UCB algorithm and abstract it away from the restrictive assumption of linearity.
+
+**Recap: The LinUCB Assumption**
+
+Recall from Chapter 2 that the LinUCB algorithm operates on a crucial assumption: the expected reward $r_{t,a}$ for a given arm $a$ at time $t$ is a linear function of its context feature vector $x_{t,a}$.
+
+**Definition 3.1: Linear Reward Model**
+Let $x_{t,a} \in \mathbb{R}^d$ be the feature vector for arm $a$ at time $t$. The LinUCB model assumes there exists an unknown but fixed parameter vector $\theta_a^* \in \mathbb{R}^d$ such that the expected reward is:
+$$
+\mathbb{E}[r_{t,a} | x_{t,a}] = (x_{t,a})^T \theta_a^*
+$$
+
+From this assumption, we derived the UCB score, which was the sum of two terms: the *estimated reward* based on our learned $\hat{\theta}_a$, and an *exploration bonus* proportional to the uncertainty in that estimate.
+
+$$
+\text{score}(a) = \underbrace{(x_{t,a})^T \hat{\theta}_{t-1,a}}_{\text{Exploitation}} + \underbrace{\alpha \sqrt{(x_{t,a})^T A_{t-1,a}^{-1} x_{t,a}}}_{\text{Exploration}}
+$$
+
+The brilliance of this formulation lies in its elegant, closed-form expression for uncertainty, derived from the properties of ridge regression.
+
+**The Generalization Step**
+
+Our goal is to replace the linear model $(x_{t,a})^T \theta_a$ with a more powerful, non-linear function approximator, which we will represent as $f(x_{t,a})$. Let us imagine, for now, that this $f$ is an arbitrary function—in our case, it will be a neural network.
+
+The core UCB principle is not intrinsically tied to linearity. It is a general strategy for decision-making under uncertainty. We can state it more broadly:
+
+**Principle: The Generalized UCB**
+At each time step $t$, for each arm $a$, select the arm that maximizes the following payoff:
+$$
+\text{select } a_t = \arg\max_{a \in \mathcal{A}} \left( \hat{\mu}_{t-1}(x_{t,a}) + \kappa_{t-1}(x_{t,a}) \right)
+$$
+where:
+*   $\hat{\mu}_{t-1}(x_{t,a})$ is the model's estimate of the mean reward for arm $a$ given features $x_{t,a}$, based on information up to step $t-1$.
+*   $\kappa_{t-1}(x_{t,a})$ is the upper confidence bound, or "exploration bonus," which quantifies the uncertainty of the estimate $\hat{\mu}$. It should be large when the model is uncertain and small when it is confident.
+
+This generalization presents us with a formidable new challenge. For linear models, the confidence bound $\kappa$ can be derived analytically. But how do we compute a meaningful confidence bound for the output of a complex, non-linear model like a deep neural network? This is the central question that the NeuralUCB algorithm aims to answer.
+
+#### **3.3 NeuralUCB: Confidence Bounds via Gradient-based Approximation**
+
+The NeuralUCB algorithm provides an elegant and effective method for applying the UCB principle to neural network models. It acknowledges that while we cannot find an exact, closed-form confidence bound for the network's output, we can construct a powerful approximation by considering the network's behavior in the vicinity of its current parameterization.
+
+The core idea is to use a form of online ridge regression, not on the input features $x$ directly, but on the *gradient of the network's output with respect to its parameters*. This gradient acts as a high-dimensional, learned feature representation that captures the sensitivity of the model's prediction to changes in its weights.
+
+Let us formalize this.
+
+**Definition 3.2: The NeuralUCB Model**
+The NeuralUCB agent is defined by:
+1.  A neural network $g(x; \theta)$ with parameters $\theta \in \mathbb{R}^p$, where $p$ is the total number of trainable parameters in the network. This network takes a context feature vector $x$ as input and outputs a scalar prediction of the reward.
+2.  A shared $p \times p$ matrix $A$ and a shared $p \times 1$ vector $b$, which are analogous to the parameters in LinUCB but are now shared across all arms.
+
+Initially, at time $t=0$, we have:
+$$
+A_0 = \lambda I_p \quad \text{(where } \lambda > 0 \text{ is a regularization parameter)}
+$$
+$$
+b_0 = \mathbf{0}_{p \times 1} \quad \text{(a zero vector of size p)}
+$$
+
+**The Prediction and Update Mechanism**
+
+At each time step $t$, the agent performs the following steps:
+
+1.  **Observe Context:** For the current user, the agent has access to a set of feature vectors $\{x_{t,a}\}_{a \in \mathcal{A}}$, one for each potential arm (product).
+2.  **Estimate Payoff:** For each arm $a$, the agent calculates a payoff $p_{t,a}$. This requires two components:
+    *   **a. Network Prediction (Exploitation):** First, it computes the network's current estimate of the reward, $g(x_{t,a}; \hat{\theta}_{t-1})$, where $\hat{\theta}_{t-1}$ are the network parameters estimated using data up to the previous step.
+    *   **b. Confidence Bound (Exploration):** It then computes the gradient of the network's output with respect to the parameters, evaluated at the current parameter estimate:
+        $$
+        \nabla g_{t,a} = \nabla_{\theta} g(x_{t,a}; \hat{\theta}_{t-1})
+        $$
+        This gradient vector $\nabla g_{t,a} \in \mathbb{R}^p$ is treated as the effective feature vector for the confidence bound calculation. The full payoff is:
+        $$
+        p_{t,a} = \underbrace{g(x_{t,a}; \hat{\theta}_{t-1})}_{\text{Exploitation}} + \underbrace{\alpha \sqrt{ (\nabla g_{t,a})^T A_{t-1}^{-1} (\nabla g_{t,a}) }}_{\text{Exploration}}
+        $$
+        where $\alpha \ge 0$ is the exploration hyperparameter.
+
+3.  **Select Arm:** The agent chooses the arm with the highest payoff:
+    $$
+    a_t = \arg\max_{a \in \mathcal{A}} p_{t,a}
+    $$
+
+4.  **Observe Reward & Update:** The agent plays arm $a_t$, observes the real-world reward $r_t$, and then updates its shared parameters:
+    *   Update the evidence matrix $A$ and reward vector $b$:
+        $$
+        A_t = A_{t-1} + (\nabla g_{t,a_t}) (\nabla g_{t,a_t})^T
+        $$
+        $$
+        b_t = b_{t-1} + r_t (\nabla g_{t,a_t})
+        $$
+    *   Update the network's weights $\theta$. This is typically done by performing one or more steps of gradient descent on a loss function. A common choice is the squared error between the prediction and the observed reward, potentially combined with a ridge penalty:
+        $$
+        \mathcal{L}(\theta) = (g(x_{t,a_t}; \theta) - r_t)^2 + \lambda ||\theta||_2^2
+        $$
+        The parameters $\hat{\theta}_{t-1}$ are updated to $\hat{\theta}_t$ by optimizing this loss on the newly acquired data point $(x_{t,a_t}, r_t)$.
+
+**Remark 3.1: The Power of Shared Parameters**
+The significance of this formulation cannot be overstated. We now have a **single, shared** matrix $A$ and vector $b$ for the entire system. When the agent recommends product $a_t$ and receives reward $r_t$, the subsequent update to $A_t$, $b_t$, and $\hat{\theta}_t$ refines a global model of the world. This new knowledge is immediately available for evaluating *all other products*, even those in completely different categories. The model learns to generalize across the entire item space, elegantly solving the primary weakness of the disjoint LinUCB model. This architecture is both statistically efficient and computationally scalable.
+
+Now, let us proceed to implement this more sophisticated agent. We will begin by defining the neural network architecture that will serve as the core of our `NeuralUCBAgent`.
+
+
