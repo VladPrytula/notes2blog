@@ -1,4 +1,8 @@
 # Modern Recommendation Systems: Notes and Code
+[![Made with Python](https://img.shields.io/badge/Made%20with-Python-blue.svg)](https://www.python.org/)
+[![Powered by PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![Built with Jupyter](https://img.shields.io/badge/Jupyter-Notebook-orange?logo=jupyter&logoColor=white)](https://jupyter.org/)
+[![Uses scikit-learn](https://img.shields.io/badge/scikit--learn-F7931E?logo=scikit-learn&logoColor=white)](https://scikit-learn.org/)
 
 This repository contains my personal notes and code explorations on modern recommendation systems. It's an ongoing effort to break down and organize the core concepts and advanced techniques in the field. Think of it as a working document rather than a finished textbook.
 
